@@ -1,0 +1,5 @@
+name = Scilab TBC Search
+description = search inside textbook companion examples
+package = IITB
+version = 1.x
+core = 7.x

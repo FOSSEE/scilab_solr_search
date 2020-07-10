@@ -1,0 +1,280 @@
+<?php
+	
+	include "bootstrap.inc";
+	
+	function solr_search_permission() {
+		
+return array(
+								"administer solr-search" => array(
+												"title" => t("administer solr-search"),
+												"description" => t("administer solr-search.")
+								) );
+	}
+	
+	function solr_search_menu() {
+		$items = array();
+		
+		// solr search admin settings
+		$items['admin/settings/solr_search'] = array(
+			'title' => 'TBC Solr-Search admin settings',
+			'page callback' => 'drupal_get_form',
+			'page arguments' => array('tbc_solr_search_settings_form'),
+			'access arguments' => array('administer solr-search'),
+			'type' => MENU_NORMAL_ITEM,
+			'file' => 'settings.inc',
+		);
+		
+		$items['tbc_solr_search'] = array(
+			'title' => 'Search within Textbook Companion Examples',
+			'page callback' => 'drupal_get_form',
+			'page arguments' => array('tbc_solr_search_form'),
+			'access callback' => TRUE,
+			'type' => MENU_NORMAL_ITEM,
+		);
+		
+		$items['add_all_books_to_solr'] = array(
+			'title' => 'Add books to Solr',
+			'page callback' => 'drupal_get_form',
+			'page arguments' => array('add_all_books_to_solr_form'),
+			'access arguments' => array('administer solr-search'),
+			'type' => MENU_NORMAL_ITEM,
+		);
+		
+		return $items;
+	}
+	
+	function tbc_solr_search_form($form,&$form_state) {
+		
+		
+		$form['tbc_search_key'] = array(
+			'#type' => 'textfield',
+			'#title' => t('Enter your keyword (Note: special characters  ^ ( ) { } \" \' [ ] are not allowed)'),
+			'#required' => TRUE,			
+		);
+		$form['submit'] = array(
+			'#type' => 'submit',
+			'#value' => t('Search'),
+			'#ajax' => array(
+				'callback' => 'ajax_solr_search_result_callback',
+				),
+		);
+            $form['tbc_search_result'] = array(
+			'#type' => 'item',
+			'#markup' => '<div id="ajax-search-result-replace"></div>',
+				
+		);
+		
+		return $form;
+	}
+
+	function tbc_solr_search_form_validate($form, &$form_state) {
+                 
+		if(preg_match('/[^a-zA-Z0-9]/', $form_state['values']['tbc_search_key'])) {
+			form_set_error('tbc_search_key', t('Special characters not allowed'));
+		}
+		return;
+	}
+	
+	function tbc_solr_search_form_submit($form, &$form_state) {
+		
+		//drupal_goto('tbc_solr_search', array('key' => $_POST['tbc_search_key']));
+           // ajax_solr_search_result_callback($form,$form_state);
+	}
+	function add_all_books_to_solr_form($form, &$form_state) {
+		$form['catid'] = array(
+			'#type' => 'select',
+			'#title' => t('Category'),
+			'#options' =>  array(0 => 'Please select',
+				1 => 'Fluid Mechanics',
+				2 => 'Control Theory & Control Systems',
+				3 => 'Chemical Engineering',
+				4 => 'Thermodynamics',
+				5 => 'Mechanical Engineering',
+				6 => 'Signal Processing',
+				7 => 'Digital Communications',
+				8 => 'Electrical Technology',
+				9 => 'Mathematics & Pure Science',
+				10 => 'Analog Electronics',
+				11 => 'Digital Electronics',
+				12 => 'Computer Programming',
+				13 => 'Others'
+			),
+		);
+
+		$form['submit'] = array(
+			'#type' => 'submit',
+			'#value' => t('Add to Solr'),
+		//	'#suffix' => $output,
+		);
+		
+		return $form;
+	}
+	
+	function add_all_books_to_solr_form_submit($form, &$form_state) {
+	
+		global $user;
+		ini_set('max_execution_time', 500000);
+		$root_path = variable_get('tbc_example_file_path', '');
+                //var_dump($root_path);die;		
+$options = array(
+			'hostname' => SOLR_SERVER_HOSTNAME,
+			'port'     => SOLR_SERVER_PORT,
+			'login'    => SOLR_SERVER_USERNAME,
+			'password' => SOLR_SERVER_PASSWORD,
+                     
+		);
+
+		$client = new SolrClient($options);
+		
+		$book_q = db_query("SELECT * FROM {textbook_companion_preference} WHERE approval_status=1 AND category= :catid AND proposal_id IN (SELECT id from textbook_companion_proposal where proposal_status=3)",array(":catid" => $form_state['values']['catid']));
+		
+     
+		while($book_data = $book_q->fetchObject()) {
+
+			$chapter_q = db_query("SELECT * FROM {textbook_companion_chapter} WHERE preference_id = :pref_id",array(":pref_id" =>$book_data->id));
+		
+			while($chapter_row = $chapter_q->fetchObject()) {
+				//$example_q = db_query("SELECT * FROM {textbook_companion_example} WHERE chapter_id = %d AND approval_status = 1", $chapter_row->id);
+				$query = db_select('textbook_companion_example');
+            $query->fields('textbook_companion_example');
+            $query->condition('chapter_id', $chapter_row->id);
+            $query->condition('approval_status', 1);
+            $example_q = $query->execute();
+				while($example_row = $example_q->fetchObject()) {
+					//$example_files_q = db_query("SELECT * FROM {textbook_companion_example_files} WHERE example_id = %d", $example_row->id);
+					$query = db_select('textbook_companion_example_files');
+               $query->fields('textbook_companion_example_files');
+               $query->condition('example_id', $example_row->id);
+               $example_files_q = $query->execute();
+					//$example_dependency_files_q = db_query("SELECT * FROM {textbook_companion_example_dependency} WHERE example_id = %d", $example_row->id);
+					$query = db_select('textbook_companion_example_dependency');
+               $query->fields('textbook_companion_example_dependency');
+               $query->condition('example_id', $example_row->id);
+               $example_dependency_files_q = $query->execute();
+					$extensions = array('sce', 'sci');
+					$example_data = '';
+					while($example_files_row = $example_files_q->fetchObject()) {
+						if(in_array(end(explode('.', $example_files_row->filepath)), $extensions)) {
+							// echo $example_files_row->filepath."<br />";
+							$my_file = $root_path.$example_files_row->filepath;
+							$handle = fopen($my_file, 'r');
+							$example_data = fread($handle,filesize($my_file));
+							fclose($handle);
+						}
+					}
+					/* dependency files */
+					$dependency_data = '';
+					while($example_dependency_files_row =$example_dependency_files_q->fetchObject()) {
+						//$dependency_file_data = db_fetch_object(db_query("SELECT * FROM {textbook_companion_dependency_files} WHERE id = %d LIMIT 1", $example_dependency_files_row->dependency_id));
+						$query = db_select('textbook_companion_dependency_files');
+                           $query->fields('textbook_companion_dependency_files');
+                           $query->condition('id', $example_dependency_files_row->dependency_id);
+                           $query->range(0, 1);
+                           $result = $query->execute();
+                           $dependency_file_data = $result->fetchObject();
+						if($dependency_file_data) {
+							if(in_array(end(explode('.', $dependency_file_data->filepath)), $extensions)) {
+								// echo $dependency_file_data->filepath."<br />";
+								$my_file = $root_path.$dependency_file_data->filepath;
+								$handle = fopen($my_file, 'r');
+								$dependency_data = fread($handle,filesize($my_file));
+								fclose($handle);
+							}
+						}
+					}
+					$doc = new SolrInputDocument();
+					$doc->addField('id', $example_row->id);
+					$doc->addField('chapter_id', $chapter_row->id);
+					$doc->addField('book_id', $book_data->id);
+					$doc->addField('title', mb_convert_encoding($book_data->book, "UTF-8"));
+					$doc->addField('author', mb_convert_encoding($book_data->author, "UTF-8"));
+					$doc->addField('chapter', mb_convert_encoding(($chapter_row->number.'. '.$chapter_row->name), "UTF-8"));
+					$doc->addField('example', mb_convert_encoding(($example_row->number.'. '.$example_row->caption), "UTF-8"));
+					$doc->addField('content', mb_convert_encoding($dependency_data, "UTF-8").mb_convert_encoding($example_data, "UTF-8"));
+					$doc->addField('added_by', $user->name);
+					$doc->addField('timestamp', date('Y-m-d H:i:s'));
+					$updateResponse = $client->addDocument($doc,false);
+                                        $client->commit();
+				}
+			}
+		}
+		$cats = array(
+					1 => 'Fluid Mechanics',
+					2 => 'Control Theory & Control Systems',
+					3 => 'Chemical Engineering',
+					4 => 'Thermodynamics',
+					5 => 'Mechanical Engineering',
+					6 => 'Signal Processing',
+					7 => 'Digital Communications',
+					8 => 'Electrical Technology',
+					9 => 'Mathematics & Pure Science',
+					10 => 'Analog Electronics',
+					11 => 'Digital Electronics',
+					12 => 'Computer Programming',
+					13 => 'Others'
+				);
+		drupal_set_message('Books under "'.$cats[$_POST['catid']].'" are updated to solr');
+	}
+	
+	function ajax_solr_search_result_callback($form, $form_state){
+$output = '';
+		//$key = '';
+                //var_dump($form_state['values']['tbc_search_key']);die;
+		$path = drupal_get_path('module', 'solr_search');
+		drupal_add_css($path.'/solr_search.css', 'module');
+		drupal_add_js($path.'/solr_search.js', 'module');
+		if(isset($form_state['values']['tbc_search_key'])) {
+			$key = $form_state['values']['tbc_search_key'];
+			$output = '';
+			$numfound = '';
+			if($key != '') {
+				$options = array(
+					'hostname' => SOLR_SERVER_HOSTNAME,
+					'login'    => SOLR_SERVER_USERNAME,
+					'password' => SOLR_SERVER_PASSWORD,
+					'port'     => SOLR_SERVER_PORT,
+				);
+				$client = new SolrClient($options);
+
+				$query = new SolrQuery();
+
+				$query->setQuery($key.'*');
+
+				$query->setStart(0);
+
+				$query->setRows(variable_get('tbc_solr_max_results', ''));
+
+				$query->addField('id')->addField('book_id')->addField('title')->addField('author')->addField('chapter')->addField('example')->addField('content')->addSortField('title', 0);
+
+				$query_response = $client->query($query);
+
+				$response = $query_response->getResponse();
+
+				$sno = 0;
+				$output = '<p><b>'.$response['response']->numFound.' result(s) found</b></p>';
+				if($response['response']->numFound > 0) {
+					$output .= '<div class="search-result"><div id="topcontrol" title="Scroll Back to Top"><a href="#top"></a></div><ol>';
+					$download_link= '';
+					foreach($response['response']->docs as $doc) {
+						$sno++;
+						$output .= '<li>';
+						$output .= '<p><b>Book: &nbsp;</b>'.$doc->title.' ('.$doc->author.')</p>';
+						$output .= '<p><b>Chapter: &nbsp;</b>'.$doc->chapter.'</p>';
+						$output .= '<p><b>Example: &nbsp;</b>'.$doc->example.'</p>';
+						$output .= '<p><b>Links: </b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="'.base_path().'textbook_companion/generate_book/'.$doc->book_id.'"><span style="font-weight:bold;font-size:16px;">&#10549;</span> Download code for the entire book</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://cloud.scilab.in/index?eid='.$doc->id.'" target="_blank"><span style="font-weight:bold;font-size:20px;">&#187;</span> View code for this example</a></p>';
+						$output .= '</li>';
+					}
+					$output .= '<ol></div>';
+				}
+			}else {
+				$output .= '<p><b>0 result(s) found</b></p>';
+			}
+		}
+
+$commands[] = ajax_command_html("#ajax-search-result-replace",  $output);	
+
+return array('#type' => 'ajax', '#commands' => $commands);
+
+}
+
+
